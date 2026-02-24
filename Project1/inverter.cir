@@ -1,0 +1,14 @@
+* inverter.cir
+* Parametric CMOS Inverter using BSIM4
+
+.param tplv=65n tpwv=130n tnlv=65n tnwv=130n tpotv=1.95n tnotv=1.85n
+
+.subckt inverter in out vdd vss
+* PMOS: M1 out in vdd vdd
+M1 out in vdd vdd pmos L={tplv} W={tpwv} TOX={tpotv}
+* NMOS: M2 out in vss vss
+M2 out in vss vss nmos L={tnlv} W={tnwv} TOX={tnotv}
+
+.model pmos pmos level=54 version=4.8.2
+.model nmos nmos level=54 version=4.8.2
+.ends inverter

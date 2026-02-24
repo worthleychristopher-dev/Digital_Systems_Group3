@@ -1,0 +1,15 @@
+* nand.cir
+.param tpwv=130n tpotv=1.95n
+.subckt nand in1 in2 out vdd vss
+
+* Pull-up network: series PMOS
+Mp1 out net1 vdd vdd pmos L=65n W={tpwv} TOX={tpotv}
+Mp2 net1 in2 vdd vdd pmos L=65n W={tpwv} TOX={tpotv}
+
+* Pull-down network: parallel NMOS
+Mn1 out in1 vss vss nmos L=65n W=130n TOX=1.85n
+Mn2 out in2 vss vss nmos L=65n W=130n TOX=1.85n
+
+.model pmos pmos level=54 version=4.8.2
+.model nmos nmos level=54 version=4.8.2
+.ends nand
