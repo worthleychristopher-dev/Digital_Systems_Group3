@@ -1,0 +1,24 @@
+# 1. Define the 50 MHz System Clock (PIN_P11)
+create_clock -name clk_50 -period 20.000 [get_ports {MAX10_CLK1_50}]
+
+# 2. Define the 10 MHz ADC Clock (PIN_N5)
+create_clock -name clk_adc_input -period 100.000 [get_ports {ADC_CLK_10}]
+
+# 3. Automatically derive the 1 MHz clock from the PLL
+# This tells Quartus to look at your ALTPLL and figure out the math for c0
+derive_pll_clocks
+
+# 4. Standard clock uncertainty (adds a safety margin for jitter)
+derive_clock_uncertainty
+
+# 5. Set False Paths between asynchronous clock domains
+# This prevents the Timing Analyzer from reporting "Setup/Hold" failures 
+# for signals crossing between the Producer and Consumer.
+
+set_false_path -from [get_clocks {clk_adc_input}] -to [get_clocks {clk_50}]
+set_false_path -from [get_clocks {clk_50}] -to [get_clocks {clk_adc_input}]
+
+# If your PLL output is named differently in the netlist, 
+# derive_pll_clocks usually handles this, but explicit is better:
+set_false_path -from [get_clocks {*|altpll_component|auto_generated|pll1|clk[0]}] -to [get_clocks {clk_50}]
+set_false_path -from [get_clocks {clk_50}] -to [get_clocks {*|altpll_component|auto_generated|pll1|clk[0]}]

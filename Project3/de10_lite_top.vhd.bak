@@ -1,0 +1,93 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+-- Import your Homework 5 package
+use work.seven_segment_pkg.all;
+
+entity de10_lite_top is
+    port (
+        -- Clocks
+        ADC_CLK_10      : in    std_logic;                      -- 10 MHz Clock
+        MAX10_CLK1_50   : in    std_logic;                      -- 50 MHz Clock
+        
+        -- Seven Segment Displays (HEX0 to HEX5)
+        -- These are 7-bit vectors: (6=g, 5=f, 4=e, 3=d, 2=c, 1=b, 0=a)
+        HEX0            : out   std_logic_vector(6 downto 0);
+        HEX1            : out   std_logic_vector(6 downto 0);
+        HEX2            : out   std_logic_vector(6 downto 0);
+        HEX3            : out   std_logic_vector(6 downto 0);
+        HEX4            : out   std_logic_vector(6 downto 0);
+        HEX5            : out   std_logic_vector(6 downto 0);
+        
+        -- Buttons and Switches (Optional for debugging)
+        KEY             : in    std_logic_vector(1 downto 0);   -- Pushbuttons
+        SW              : in    std_logic_vector(9 downto 0)    -- Slide switches
+    );
+end entity de10_lite_top;
+
+architecture top_arch of de10_lite_top is
+
+    -- 1. Internal Clock Signals
+    signal clk_1MHz     : std_logic;
+    signal pll_locked   : std_logic;
+
+    -- 2. ADC Signals
+    signal adc_soc      : std_logic := '0';
+    signal adc_eoc      : std_logic;
+    signal adc_dout     : natural range 0 to 4095;
+    
+    -- 3. FIFO / CDC Signals
+    -- We need these to bridge the 1MHz (ADC) and 50MHz (Display) domains
+    signal fifo_data_in  : std_logic_vector(11 downto 0);
+    signal fifo_data_out : std_logic_vector(11 downto 0);
+    signal fifo_empty    : std_logic;
+    signal fifo_rd_en    : std_logic := '0';
+    signal fifo_wr_en    : std_logic := '0';
+
+    -- 4. Display Signals (using your HW5 Records)
+    signal hex0_rec, hex1_rec, hex2_rec : seven_segment_config;
+
+begin
+
+    ---------------------------------------------------------
+    -- PLL Instance (The one you created in IP Catalog)
+    ---------------------------------------------------------
+    U_PLL : entity work.adc_pll 
+        port map (
+            inclk0 => ADC_CLK_10,
+            c0     => clk_1MHz,     -- Output 1 MHz
+            locked => pll_locked
+        );
+
+    ---------------------------------------------------------
+    -- ADC Wrapper Instance
+    ---------------------------------------------------------
+    U_ADC : entity work.max10_adc
+        port map (
+            pll_clk => ADC_CLK_10,  -- Input 10MHz
+            chsel   => 17,          -- Channel 17 = Temperature Sensor
+            soc     => adc_soc,
+            tsen    => '1',         -- Temperature mode ON
+            dout    => adc_dout,
+            eoc     => adc_eoc,
+            clk_dft => open
+        );
+
+    -- [Place for your Producer FSM - Logic to drive adc_soc and fifo_wr_en]
+
+    -- [Place for your CDC FIFO Synchronizer - The bridge between 1MHz and 50MHz]
+
+    -- [Place for your Consumer Logic - Binary to BCD and Display drivers]
+
+    ---------------------------------------------------------
+    -- Mapping Records to Physical Pins (Using HW5 logic)
+    ---------------------------------------------------------
+    -- This converts your record structure back into the bit-vector Quartus expects
+    HEX0 <= hex0_rec.g & hex0_rec.f & hex0_rec.e & hex0_rec.d & hex0_rec.c & hex0_rec.b & hex0_rec.a;
+    HEX1 <= hex1_rec.g & hex1_rec.f & hex1_rec.e & hex1_rec.d & hex1_rec.c & hex1_rec.b & hex1_rec.a;
+    -- Turn others off for now
+    HEX2 <= (others => '1'); HEX3 <= (others => '1'); 
+    HEX4 <= (others => '1'); HEX5 <= (others => '1');
+
+end architecture top_arch;
