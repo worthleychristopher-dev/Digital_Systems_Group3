@@ -1,0 +1,35 @@
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity sync2 is
+		generic (
+				width : positive :=1
+		);
+		
+		port (
+		     clk		: in 	std_logic;
+			  rst_n	: in  std_logic;
+			  d		: in	std_logic_vector(width- 1 downto 0);
+			  q		: out std_logic_vector(width- 1 downto 0)
+		);
+end entity sync2;
+
+architecture rtl of sync2 is
+		signal q1	: std_logic_vector(width- 1 downto 0) := (others => '0');
+begin
+		process(clk, rst_n)
+		begin
+		     if rst_n = '0' then
+			        q1 <= (others => '0');
+					  q  <= (others => '0');
+			  elseif rising_edge(clk) then
+			        q1 <= d;
+					  q  <= q1;
+			  end if;
+	  end process;
+end architecture rtl;
+
+
+
+
+

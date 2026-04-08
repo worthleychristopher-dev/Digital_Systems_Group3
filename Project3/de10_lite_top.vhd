@@ -18,47 +18,68 @@ end entity de10_lite_top;
 
 architecture top_arch of de10_lite_top is
 
-    -- Clock signals
+    -------------------------------------------------------
+    -- CLOCK SIGNALS
+    -------------------------------------------------------
     signal clk_10MHz_pll : std_logic;
-    signal clk_1MHz_raw  : std_logic;
     signal pll_locked    : std_logic;
 
-    -- ADC signals
+    -------------------------------------------------------
+    -- PRODUCER SIDE SIGNALS (10 MHz domain)
+    -------------------------------------------------------
     signal adc_eoc       : std_logic;
     signal adc_dout_32   : std_logic_vector(31 downto 0);
     signal adc_dout      : natural range 0 to 4095;
 
-    -- CDC signals
-    signal eoc_latch     : std_logic := '0';
     signal eoc_sync1     : std_logic := '0';
     signal eoc_sync2     : std_logic := '0';
+    signal eoc_latch     : std_logic := '0';
 
-    -- Display signals
-    signal display_data  : std_logic_vector(11 downto 0) := (others => '0');
-    signal hex0_rec, hex1_rec, hex2_rec : seven_segment_config;
+    type prod_state_t is (WAIT_FOR_IRQ, CAPTURE);
+    signal prod_state    : prod_state_t := WAIT_FOR_IRQ;
+    signal capture_timer : unsigned(7 downto 0)  := (others => '0');
 
-    -- FSM
-    type state_t is (WAIT_FOR_IRQ, CAPTURE);
-    signal state          : state_t := WAIT_FOR_IRQ;
-    signal capture_timer  : unsigned(7 downto 0)  := (others => '0');
-    signal sample_counter : unsigned(19 downto 0) := (others => '0');
-
-    -- Sequencer init signals
     signal seq_init_done : std_logic := '0';
     signal seq_write     : std_logic := '0';
     signal seq_writedata : std_logic_vector(31 downto 0) := (others => '0');
 
+    signal fifo_wdata    : std_logic_vector(11 downto 0) := (others => '0');
+    signal fifo_wput     : std_logic := '0';
+    signal fifo_wrdy     : std_logic;
+
+    -------------------------------------------------------
+    -- CONSUMER SIDE SIGNALS (50 MHz domain)
+    -------------------------------------------------------
+    signal fifo_rdata    : std_logic_vector(11 downto 0);
+    signal fifo_rget     : std_logic := '0';
+    signal fifo_rrdy     : std_logic;
+    signal display_data  : std_logic_vector(11 downto 0) := (others => '0');
+    signal hex0_rec, hex1_rec, hex2_rec : seven_segment_config;
+
+    -------------------------------------------------------
+    -- FIFO ACTIVITY LATCHES FOR LED DEBUG
+    -------------------------------------------------------
+    signal wput_latch    : std_logic := '0';
+    signal rrdy_latch    : std_logic := '0';
+    signal rget_latch    : std_logic := '0';
+
 begin
 
+    -------------------------------------------------------
+    -- PLL INSTANTIATION
+    -------------------------------------------------------
     U_PLL : entity work.adc_pll
         port map (
             areset => '0',
             inclk0 => ADC_CLK_10,
             c0     => clk_10MHz_pll,
-            c1     => clk_1MHz_raw,
+            c1     => open,
             locked => pll_locked
         );
 
+    -------------------------------------------------------
+    -- MODULAR ADC CORE INSTANTIATION
+    -------------------------------------------------------
     U_ADC : entity work.modular_adc
         port map (
             clock_clk                  => clk_10MHz_pll,
@@ -80,9 +101,29 @@ begin
 
     adc_dout <= to_integer(unsigned(adc_dout_32(11 downto 0)));
 
-    ---------------------------------------------------------
-    -- 10 MHz process: two-stage synchronizer for EOC
-    ---------------------------------------------------------
+    -------------------------------------------------------
+    -- FIFO SYNCHRONIZER INSTANTIATION
+    -------------------------------------------------------
+    U_FIFO : entity work.cdc_fifo
+        generic map (
+            data_width => 12
+        )
+        port map (
+            wclk   => clk_10MHz_pll,
+            wrst_n => pll_locked,
+            wdata  => fifo_wdata,
+            wput   => fifo_wput,
+            wrdy   => fifo_wrdy,
+            rclk   => MAX10_CLK1_50,
+            rrst_n => pll_locked,
+            rdata  => fifo_rdata,
+            rget   => fifo_rget,
+            rrdy   => fifo_rrdy
+        );
+
+    -------------------------------------------------------
+    -- PROCESS 1: EOC two-stage synchronizer (10 MHz)
+    -------------------------------------------------------
     process(clk_10MHz_pll)
     begin
         if rising_edge(clk_10MHz_pll) then
@@ -90,15 +131,15 @@ begin
             eoc_sync2 <= eoc_sync1;
             if eoc_sync2 = '1' then
                 eoc_latch <= '1';
-            elsif state = CAPTURE then
+            elsif prod_state = CAPTURE then
                 eoc_latch <= '0';
             end if;
         end if;
     end process;
 
-    ---------------------------------------------------------
-    -- Sequencer init process
-    ---------------------------------------------------------
+    -------------------------------------------------------
+    -- PROCESS 2: Sequencer init (10 MHz)
+    -------------------------------------------------------
     process(clk_10MHz_pll)
     begin
         if rising_edge(clk_10MHz_pll) then
@@ -117,55 +158,88 @@ begin
         end if;
     end process;
 
-    ---------------------------------------------------------
-    -- FSM + display process
-    ---------------------------------------------------------
+    -------------------------------------------------------
+    -- PROCESS 3: Producer FSM (10 MHz)
+    -- Reads ADC, converts to Celsius, writes to FIFO
+    -------------------------------------------------------
     process(clk_10MHz_pll)
-        variable temp_bin : unsigned(11 downto 0);
-        variable bcd      : unsigned(15 downto 0);
-        variable temp_c   : natural range 0 to 4095;
+        variable temp_c : natural range 0 to 4095;
     begin
         if rising_edge(clk_10MHz_pll) then
+            fifo_wput <= '0';
+
             if pll_locked = '0' then
-                state          <= WAIT_FOR_IRQ;
-                capture_timer  <= (others => '0');
-                sample_counter <= (others => '0');
-                display_data   <= (others => '0');
+                prod_state    <= WAIT_FOR_IRQ;
+                capture_timer <= (others => '0');
+                fifo_wdata    <= (others => '0');
+                wput_latch    <= '0';
             else
-                case state is
+                case prod_state is
+
                     when WAIT_FOR_IRQ =>
                         if eoc_latch = '1' then
                             capture_timer <= (others => '0');
-                            state <= CAPTURE;
+                            prod_state    <= CAPTURE;
                         end if;
 
                     when CAPTURE =>
                         capture_timer <= capture_timer + 1;
                         if capture_timer >= 10 then
-                            sample_counter <= sample_counter + 1;
-                            if sample_counter >= 500000 then
-                                sample_counter <= (others => '0');
-                                -- Convert raw ADC code to Celsius
-                                -- Formula: Temp(C) = (4476 - adc_dout) * 100 / 1635
-                                temp_c := (4476 - adc_dout) * 100 / 1635;
-                                display_data <= std_logic_vector(
-                                    to_unsigned(temp_c, 12));
+                            temp_c := (4476 - adc_dout) * 100 / 1635;
+                            fifo_wdata <= std_logic_vector(
+                                to_unsigned(temp_c, 12));
+                            if fifo_wrdy = '1' then
+                                fifo_wput  <= '1';
+                                wput_latch <= '1';
                             end if;
-                            state <= WAIT_FOR_IRQ;
+                            prod_state <= WAIT_FOR_IRQ;
                         end if;
 
                     when others =>
-                        state <= WAIT_FOR_IRQ;
+                        prod_state <= WAIT_FOR_IRQ;
+
                 end case;
             end if;
+        end if;
+    end process;
 
-            -- Double Dabble BCD conversion for display
+    -------------------------------------------------------
+    -- PROCESS 4: Consumer FSM + Display (50 MHz)
+    -- Reads from FIFO, drives HEX displays
+    -------------------------------------------------------
+    process(MAX10_CLK1_50)
+        variable temp_bin : unsigned(11 downto 0);
+        variable bcd      : unsigned(15 downto 0);
+    begin
+        if rising_edge(MAX10_CLK1_50) then
+            fifo_rget <= '0';
+
+            if pll_locked = '0' then
+                display_data  <= (others => '0');
+                rrdy_latch    <= '0';
+                rget_latch    <= '0';
+            else
+                if fifo_rrdy = '1' then
+                    fifo_rget  <= '1';
+                    display_data <= fifo_rdata;
+                    rrdy_latch <= '1';
+                    rget_latch <= '1';
+                end if;
+            end if;
+
+            -- Double Dabble BCD conversion
             temp_bin := unsigned(display_data);
             bcd      := (others => '0');
             for i in 0 to 11 loop
-                if bcd(3 downto 0)  >= 5 then bcd(3 downto 0)  := bcd(3 downto 0)  + 3; end if;
-                if bcd(7 downto 4)  >= 5 then bcd(7 downto 4)  := bcd(7 downto 4)  + 3; end if;
-                if bcd(11 downto 8) >= 5 then bcd(11 downto 8) := bcd(11 downto 8) + 3; end if;
+                if bcd(3 downto 0)  >= 5 then
+                    bcd(3 downto 0)  := bcd(3 downto 0)  + 3;
+                end if;
+                if bcd(7 downto 4)  >= 5 then
+                    bcd(7 downto 4)  := bcd(7 downto 4)  + 3;
+                end if;
+                if bcd(11 downto 8) >= 5 then
+                    bcd(11 downto 8) := bcd(11 downto 8) + 3;
+                end if;
                 bcd      := bcd(14 downto 0) & temp_bin(11);
                 temp_bin := temp_bin(10 downto 0) & '0';
             end loop;
@@ -173,10 +247,13 @@ begin
             hex0_rec <= get_hex_digit(to_integer(bcd(3 downto 0)));
             hex1_rec <= get_hex_digit(to_integer(bcd(7 downto 4)));
             hex2_rec <= get_hex_digit(to_integer(bcd(11 downto 8)));
+
         end if;
     end process;
 
-    -- Hardware mapping
+    -------------------------------------------------------
+    -- HARDWARE MAPPING
+    -------------------------------------------------------
     HEX0 <= hex0_rec.g & hex0_rec.f & hex0_rec.e & hex0_rec.d &
             hex0_rec.c & hex0_rec.b & hex0_rec.a;
     HEX1 <= hex1_rec.g & hex1_rec.f & hex1_rec.e & hex1_rec.d &
@@ -187,9 +264,13 @@ begin
     HEX4 <= (others => '1');
     HEX5 <= (others => '1');
 
-    LEDR(0)          <= pll_locked;
-    LEDR(1)          <= adc_eoc;
-    LEDR(2)          <= eoc_latch;
-    LEDR(9 downto 3) <= adc_dout_32(9 downto 3);
+    LEDR(0) <= pll_locked;
+    LEDR(1) <= adc_eoc;
+    LEDR(2) <= eoc_latch;
+    LEDR(3) <= fifo_wrdy;
+    LEDR(4) <= wput_latch;
+    LEDR(5) <= rrdy_latch;
+    LEDR(6) <= rget_latch;
+    LEDR(9 downto 7) <= (others => '0');
 
 end architecture;

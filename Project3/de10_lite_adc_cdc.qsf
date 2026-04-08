@@ -214,4 +214,8 @@ set_global_assignment -name VHDL_FILE de10_lite_top.vhd
 set_global_assignment -name SDC_FILE de10_lite_top.sdc
 set_global_assignment -name TCL_SCRIPT_FILE pin_assignments.tcl
 set_global_assignment -name QIP_FILE adc_pll.qip
+set_global_assignment -name VHDL_FILE sync2.vhd
+set_global_assignment -name VHDL_FILE wctl.vhd
+set_global_assignment -name VHDL_FILE rctl.vhd
+set_global_assignment -name VHDL_FILE cdc_fifo.vhd
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
