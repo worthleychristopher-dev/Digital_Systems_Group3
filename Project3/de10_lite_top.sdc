@@ -12,3 +12,11 @@ set_clock_groups -asynchronous \
 # Suppress false path inside ADC primitive
 set_false_path -from [get_clocks {*pll*|clk[0]}] \
                -to [get_registers {*U_ADC*|eoc*}]
+					
+set_false_path -to [get_ports {HEX0[*]}]
+set_false_path -to [get_ports {HEX1[*]}]
+set_false_path -to [get_ports {HEX2[*]}]
+set_false_path -to [get_ports {HEX3[*]}]
+set_false_path -to [get_ports {HEX4[*]}]
+set_false_path -to [get_ports {HEX5[*]}]
+set_false_path -to [get_ports {LEDR[*]}]

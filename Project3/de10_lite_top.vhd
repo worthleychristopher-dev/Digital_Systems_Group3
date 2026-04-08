@@ -30,14 +30,16 @@ architecture top_arch of de10_lite_top is
     signal adc_eoc       : std_logic;
     signal adc_dout_32   : std_logic_vector(31 downto 0);
     signal adc_dout      : natural range 0 to 4095;
+    signal adc_captured  : natural range 0 to 4095 := 0;
 
     signal eoc_sync1     : std_logic := '0';
     signal eoc_sync2     : std_logic := '0';
     signal eoc_latch     : std_logic := '0';
 
-    type prod_state_t is (WAIT_FOR_IRQ, CAPTURE);
+    -- Three state FSM with pipeline stage
+    type prod_state_t is (WAIT_FOR_IRQ, CAPTURE, CONVERT);
     signal prod_state    : prod_state_t := WAIT_FOR_IRQ;
-    signal capture_timer : unsigned(7 downto 0)  := (others => '0');
+    signal capture_timer : unsigned(7 downto 0) := (others => '0');
 
     signal seq_init_done : std_logic := '0';
     signal seq_write     : std_logic := '0';
@@ -160,10 +162,11 @@ begin
 
     -------------------------------------------------------
     -- PROCESS 3: Producer FSM (10 MHz)
-    -- Reads ADC, converts to Celsius, writes to FIFO
+    -- Three states: WAIT_FOR_IRQ -> CAPTURE -> CONVERT
+    -- CAPTURE saves raw ADC value
+    -- CONVERT does the math next cycle (pipeline stage)
     -------------------------------------------------------
     process(clk_10MHz_pll)
-        variable temp_c : natural range 0 to 4095;
     begin
         if rising_edge(clk_10MHz_pll) then
             fifo_wput <= '0';
@@ -171,6 +174,7 @@ begin
             if pll_locked = '0' then
                 prod_state    <= WAIT_FOR_IRQ;
                 capture_timer <= (others => '0');
+                adc_captured  <= 0;
                 fifo_wdata    <= (others => '0');
                 wput_latch    <= '0';
             else
@@ -183,17 +187,25 @@ begin
                         end if;
 
                     when CAPTURE =>
+                        -- Wait for data to settle then save raw value
+                        -- No division here - keeps this cycle fast
                         capture_timer <= capture_timer + 1;
                         if capture_timer >= 10 then
-                            temp_c := (4476 - adc_dout) * 100 / 1635;
-                            fifo_wdata <= std_logic_vector(
-                                to_unsigned(temp_c, 12));
-                            if fifo_wrdy = '1' then
-                                fifo_wput  <= '1';
-                                wput_latch <= '1';
-                            end if;
-                            prod_state <= WAIT_FOR_IRQ;
+                            adc_captured <= adc_dout;
+                            prod_state   <= CONVERT;
                         end if;
+
+                    when CONVERT =>
+                        -- Division happens here in its own dedicated cycle
+                        -- This spreads the combinational depth across two cycles
+                        fifo_wdata <= std_logic_vector(
+                            to_unsigned(
+                                (4476 - adc_captured) * 100 / 1635, 12));
+                        if fifo_wrdy = '1' then
+                            fifo_wput  <= '1';
+                            wput_latch <= '1';
+                        end if;
+                        prod_state <= WAIT_FOR_IRQ;
 
                     when others =>
                         prod_state <= WAIT_FOR_IRQ;
@@ -205,7 +217,6 @@ begin
 
     -------------------------------------------------------
     -- PROCESS 4: Consumer FSM + Display (50 MHz)
-    -- Reads from FIFO, drives HEX displays
     -------------------------------------------------------
     process(MAX10_CLK1_50)
         variable temp_bin : unsigned(11 downto 0);
@@ -220,10 +231,10 @@ begin
                 rget_latch    <= '0';
             else
                 if fifo_rrdy = '1' then
-                    fifo_rget  <= '1';
+                    fifo_rget    <= '1';
                     display_data <= fifo_rdata;
-                    rrdy_latch <= '1';
-                    rget_latch <= '1';
+                    rrdy_latch   <= '1';
+                    rget_latch   <= '1';
                 end if;
             end if;
 
